@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>The Metric That Lies in Plain Sight – Parachute Health</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <header class="site-header">
+    <div class="header-inner">
+      <span class="publication-label">Parachute Health &middot; Data &amp; Analytics</span>
+    </div>
+  </header>
+
+  <div class="header-rule"></div>
+
+  <main class="article-container">
+
+    <section class="article-header">
+      <h1 class="headline">The Metric That Lies in Plain Sight</h1>
+      <p class="deck">The dbt data models our data engineering team built are solid and well-architected. So why are the numbers telling a different story than we expect?</p>
+      <div class="byline-block">
+        <p class="byline">By <span class="author">Karena Kariampuzha</span></p>
+        <p class="dateline">June 2026</p>
+      </div>
+    </section>
+
+    <div class="rule-thin"></div>
+
+    <article class="article-body">
+
+      <p>There is a quiet puzzle hiding inside our Looker dashboard, and it has nothing to do with the quality of the work. The dbt data models our data engineering team built are solid, well-architected, and a genuine step forward. The puzzle is subtler than that — it lives in the gap between what we <em>think</em> the numbers are saying and what they are actually measuring.</p>
+
+      <p>To understand it, you need to go back to a simpler time — the legacy era, when an order had a submission date and life made sense.</p>
+
+      <h2 class="section-heading">A Tale of Two Timestamps</h2>
+
+      <p>In the old world, submission meant one thing: the facility had done their part — at least enough of it — and was handing the order to the supplier for the first time. <em>Here it is, go work your magic.</em> That handoff was the heartbeat of every metric we tracked.</p>
+
+      <p>The wrinkle, of course, is that submission was never truly a one-time event. An order could be sent back to the facility for more information, corrected, and resubmitted. It happened all the time. But historically we made a deliberate choice to anchor to one of two timestamps: <code>first_submitted_at</code>, capturing that original handoff, or <code>submitted_at</code>, capturing the most recent one. Two timestamps, two different answers to the same question, and years of metric drift depending on which one a given query happened to use. It was messy — but at least everyone agreed on the <em>concept</em>. Submission was a facility action. It meant something specific.</p>
+
+      <p>That concept no longer exists in our new model — and that's not a criticism. It's a natural consequence of building something more sophisticated.</p>
+
+      <h2 class="section-heading">Enter the Episode</h2>
+
+      <p>The new architecture organizes orders into episodes — discrete windows of activity between a facility and a supplier. It's a genuinely powerful upgrade, and our data engineering team has done strong work building the dbt models that power it. It unlocks granularity we've never had before: supplier-level accountability, episode-level cycle times, visibility into exactly where an order stalled.</p>
+
+      <p>But every powerful model comes with tradeoffs worth understanding. Here, the concept of "submission" has been absorbed into "received" — and those two things aren't quite the same. In the episode model, every time a supplier gets access to an order, a new <code>received_at</code> timestamp is recorded. The first receipt maps loosely to what legacy called <code>first_submitted_at</code> — the original handoff. But when an order gets sent back and resubmitted, the episode breaks. A new episode begins. A new <code>received_at</code> is born. The model is accurately capturing what happened. The opportunity is making sure our metrics reflect that correctly.</p>
+
+      <p>I tried to find the right filter to produce a clean 1:1 match with legacy's <code>first_submitted_at</code> — first trying <code>MIN(received_at)</code> with <code>episode_start_activity = 'facility_order_created'</code>, then considering <code>is_first_supplier_receipt_episode = TRUE</code> as the next candidate. Neither landed perfectly. And honestly, at some point you have to ask: is it even worth chasing a 1:1 match? The models are measuring subtly different things by design. That question is still open and worth a conversation.</p>
+
+      <h2 class="section-heading">The Join That Isn't</h2>
+
+      <p>Here's where it gets technical — but stay with me, because this is important context for anyone building on top of these metrics.</p>
+
+      <p>Every metric tile on the current Looker dashboard is written as <code>orders LEFT JOIN order_episodes</code>. On its face, this looks like an order-level query. The driving table is <code>orders</code>. The join is a LEFT join, which would normally mean orders without episodes still appear. It feels safe.</p>
+
+      <p>In practice though, the WHERE clause requires <code>order_episodes.supplier_received.received_at</code> to fall within the reporting window. The moment you filter on a column from the right side of a LEFT JOIN, any row without a match gets a NULL — and NULLs don't pass date filters. The LEFT JOIN quietly becomes an INNER JOIN, and <code>order_episodes</code> ends up doing all the heavy lifting. Every dimension, every date axis, every numerator, every denominator — it all flows from <code>order_episodes</code>. The <code>orders</code> table is really just there to carry two attributes: whether an order was organic, and whether it was a test.</p>
+
+      <p>This isn't a flaw in the dashboard — it's just worth noting and ensuring the tile titles match our intentions, because it means we're effectively reporting at the episode level even when the metric label suggests otherwise.</p>
+
+      <h2 class="section-heading">What This Means in Practice</h2>
+
+      <p>Consider a single order that bounces between a facility and supplier across five months — October through February. Each month, at least one episode has <code>is_received = true</code>. Under the current logic, that one order shows up in the denominator of <em>five separate monthly bars</em> on the chart. Not because five different orders were received. Because one order had a busy life.</p>
+
+      <p>The data isn't wrong. Each receipt really happened. The opportunity is making sure anyone reading the chart understands that "orders received" means receipt <em>events</em>, not necessarily unique orders — and that a single order can contribute to multiple months.</p>
+
+      <h2 class="section-heading">The Real Question We Need to Answer Together</h2>
+
+      <p>Order episodes are the right long-term model, full stop. The richness of what's now possible is genuinely exciting and a huge step forward from where we were.</p>
+
+      <p>The conversation worth having is about what we want our top-line metrics to represent. A supplier who wants to know how many <em>new</em> orders hit their queue in January — counted once, cleanly — needs a slightly different filter than what's currently in place. Fields like <code>is_first_supplier_receipt_episode</code> exist precisely for this and get us most of the way there. It's less about fixing something broken and more about being intentional: documenting what each metric is measuring, and making sure the labels on the dashboard match the question being answered.</p>
+
+      <p>The foundation is strong. Now we make sure everyone's reading it the same way.</p>
+
+      <h2 class="section-heading">Next Steps</h2>
+
+      <ol class="next-steps">
+        <li>
+          <strong>Consensus on data grain</strong> — we must reach a collective agreement on whether our primary supplier metrics should reflect unique order arrivals or the broader volume of episode-level events. While each perspective offers value, our reporting requires a singular, documented intent.
+        </li>
+        <li>
+          <strong>Refining Looker logic</strong> — once the grain is established, we will need to adjust our LookML measures accordingly. This likely involves applying a filter for <code>is_first_supplier_receipt_episode = TRUE</code> to our denominators and ensuring every tile label precisely matches the logic beneath it.
+        </li>
+        <li>
+          <strong>Bridging the legacy divide</strong> — we need to determine if parity with historical metrics is a priority, or if we should treat the episode model as a fundamental shift in methodology, documenting the transition for stakeholders who track performance over time.
+        </li>
+      </ol>
+
+    </article>
+
+    <div class="rule-thin rule-footer"></div>
+
+  </main>
+
+  <footer class="site-footer">
+    <p>Parachute Health &middot; Data &amp; Analytics</p>
+  </footer>
+
+</body>
+</html>
